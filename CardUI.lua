@@ -5,7 +5,6 @@ import "android.view.*"
 import "android.content.*"
 import "android.graphics.drawable.*"
 import "android.graphics.*"
-import "java.net.URL"
 
 local context = activity
 local windowManager = context.getSystemService("window")
@@ -29,7 +28,7 @@ local iconContainer = LinearLayout(context)
 local mainContainer = LinearLayout(context)
 
 --------------------------------------------------
--- 1. FLOATING LOGO SETUP (NATIVE ASYNCTASK)
+-- 1. FLOATING LOGO SETUP (LOCAL STORAGE METHOD)
 --------------------------------------------------
 local iconParams = WindowManager.LayoutParams()
 if Build.VERSION.SDK_INT >= 26 then
@@ -48,31 +47,33 @@ iconParams.y = 300
 local logoImage = ImageView(context)
 logoImage.setScaleType(ImageView.ScaleType.FIT_CENTER)
 
--- Safe native downloader completely bypassing java.lang.Thread limitations
-local function loadLogoNatively(imgUrl, imageView)
-    local task = luajava.createProxy("android.os.AsyncTask", {
-        doInBackground = function(params)
-            local success, result = pcall(function()
-                local url = luajava.newInstance("java.net.URL", imgUrl)
-                local connection = url.openConnection()
-                connection.setDoInput(true)
-                connection.connect()
-                local input = connection.getInputStream()
-                return BitmapFactory.decodeStream(input)
-            end)
-            if success then return result end
-            return nil
-        end,
-        onPostExecute = function(bitmap)
-            if bitmap then
-                imageView.setImageBitmap(bitmap)
-            end
+-- Clean Download Layer using GameGuardian native IO file systems
+local localIconPath = "/sdcard/Download/prinzvan_ic.png"
+local fileTest = io.open(localIconPath, "r")
+
+if fileTest then
+    fileTest:close()
+else
+    -- File doesn't exist yet, fetch it cleanly through GG core web system
+    local response = gg.makeRequest("https://sharebooster.neocities.org/ic.png")
+    if response and response.content then
+        local output = io.open(localIconPath, "wb")
+        if output then
+            output:write(response.content)
+            output:close()
         end
-    })
-    task.execute(luajava.newInstance("[Ljava.lang.String;", {}))
+    end
 end
 
-loadLogoNatively("https://sharebooster.neocities.org/ic.png", logoImage)
+-- Render the downloaded file locally without complex Java object arrays
+local localBitmap = BitmapFactory.decodeFile(localIconPath)
+if localBitmap then
+    logoImage.setImageBitmap(localBitmap)
+else
+    -- Fallback safety style: Colored circle if file permission is restricted
+    logoImage.setBackground(createShape("#00E5FF", 70, 0, nil))
+end
+
 iconContainer.addView(logoImage)
 
 --------------------------------------------------
