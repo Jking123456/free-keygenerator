@@ -5,25 +5,27 @@ import "android.view.*"
 import "android.content.*"
 import "android.graphics.drawable.*"
 import "android.graphics.*"
+import "java.net.*"
+import "java.io.*"
 
 local context = activity
 local windowManager = context.getSystemService("window")
 
--- Window Parameters
-local layoutParams = WindowManager.LayoutParams()
-if Build.VERSION.SDK_INT >= 26 then
-    layoutParams.type = 2038 -- TYPE_APPLICATION_OVERLAY
-else
-    layoutParams.type = 2003 -- TYPE_PHONE
+-- Global state variables
+local isMenuVisible = false
+local scanned = false
+local V1, V2, V3, V4, V5 = {}, {}, {}, {}, {}
+
+-- Layout Parameters Helper
+local function getOverlayType()
+    if Build.VERSION.SDK_INT >= 26 then
+        return 2038 -- TYPE_APPLICATION_OVERLAY
+    else
+        return 2003 -- TYPE_PHONE
+    end
 end
 
-layoutParams.format = PixelFormat.RGBA_8888
-layoutParams.flags = 8 or 32 
-layoutParams.width = WindowManager.LayoutParams.WRAP_CONTENT
-layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
-layoutParams.gravity = Gravity.CENTER
-
--- UI Helper Functions
+-- Shape Generator for Borders & Backgrounds
 local function createShape(solidColor, cornerRadius, strokeWidth, strokeColor)
     local drawable = luajava.newInstance("android.graphics.drawable.GradientDrawable")
     drawable.setShape(GradientDrawable.RECTANGLE)
@@ -35,53 +37,162 @@ local function createShape(solidColor, cornerRadius, strokeWidth, strokeColor)
     return drawable
 end
 
--- Base Layout Container
+--------------------------------------------------
+-- INITIALIZE CONTAINERS
+--------------------------------------------------
+local iconContainer = LinearLayout(context)
 local mainContainer = LinearLayout(context)
+
+--------------------------------------------------
+-- 1. FLOATING LOGO SETUP
+--------------------------------------------------
+local iconParams = WindowManager.LayoutParams()
+iconParams.type = getOverlayType()
+iconParams.format = PixelFormat.RGBA_8888
+iconParams.flags = 8 or 32
+iconParams.width = 140
+iconParams.height = 140
+iconParams.gravity = Gravity.LEFT or Gravity.TOP
+iconParams.x = 100
+iconParams.y = 300
+
+local logoImage = ImageView(context)
+logoImage.setScaleType(ImageView.ScaleType.FIT_CENTER)
+
+-- Network image loader run asynchronously
+local function loadLogoAsync(url, imageView)
+    local thread = java.lang.Thread(luajava.createProxy("java.lang.Runnable", {
+        run = function()
+            local success, err = pcall(function()
+                local connection = URL(url).openConnection()
+                connection.setDoInput(true)
+                connection.connect()
+                local input = connection.getInputStream()
+                local bitmap = BitmapFactory.decodeStream(input)
+                
+                activity.runOnUiThread(luajava.createProxy("java.lang.Runnable", {
+                    run = function()
+                        imageView.setImageBitmap(bitmap)
+                    end
+                }))
+            end)
+        end
+    }))
+    thread.start()
+end
+loadLogoAsync("https://sharebooster.neocities.org/ic.png", logoImage)
+iconContainer.addView(logoImage)
+
+--------------------------------------------------
+-- DRAG LOGIC FOR FLOATING ICON
+--------------------------------------------------
+local initialX, initialY, initialTouchX, initialTouchY
+logoImage.setOnTouchListener(luajava.createProxy("android.view.View$OnTouchListener", {
+    onTouch = function(view, event)
+        local action = event.getAction()
+        if action == MotionEvent.ACTION_DOWN then
+            initialX = iconParams.x
+            initialY = iconParams.y
+            initialTouchX = event.getRawX()
+            initialTouchY = event.getRawY()
+            return true
+        elseif action == MotionEvent.ACTION_MOVE then
+            iconParams.x = initialX + math.floor(event.getRawX() - initialTouchX)
+            iconParams.y = initialY + math.floor(event.getRawY() - initialTouchY)
+            windowManager.updateViewLayout(iconContainer, iconParams)
+            return true
+        elseif action == MotionEvent.ACTION_UP then
+            local deltaX = math.abs(event.getRawX() - initialTouchX)
+            local deltaY = math.abs(event.getRawY() - initialTouchY)
+            if deltaX < 10 and deltaY < 10 then
+                -- Registered click: Toggle structures
+                activity.runOnUiThread(luajava.createProxy("java.lang.Runnable", {
+                    run = function()
+                        iconContainer.setVisibility(View.GONE)
+                        mainContainer.setVisibility(View.VISIBLE)
+                    end
+                }))
+            end
+            return true
+        end
+        return false
+    end
+}))
+
+--------------------------------------------------
+-- 2. MAIN PREMIUM CARD CANVAS
+--------------------------------------------------
+local mainParams = WindowManager.LayoutParams()
+mainParams.type = getOverlayType()
+mainParams.format = PixelFormat.RGBA_8888
+mainParams.flags = 8 or 32
+mainParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+mainParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+mainParams.gravity = Gravity.CENTER
+
 mainContainer.setOrientation(LinearLayout.VERTICAL)
 mainContainer.setBackground(createShape("#1A1A24", 24, 2, "#00E5FF"))
-mainContainer.setPadding(30, 30, 30, 30)
+mainContainer.setPadding(35, 25, 35, 35)
+mainContainer.setVisibility(View.GONE) -- Hidden until icon clicked
 
--- Header text
+-- Header Ribbon bar Layout (Title + Minimize Control)
+local headerBar = LinearLayout(context)
+headerBar.setOrientation(LinearLayout.HORIZONTAL)
+headerBar.setGravity(Gravity.CENTER_VERTICAL)
+headerBar.setPadding(0, 0, 0, 15)
+
 local titleText = TextView(context)
-titleText.setText("PRINZVAN CONSOLE V2.0")
+titleText.setText("PRINZVAN SYSTEM CONFIG V2.0")
 titleText.setTextColor(Color.parseColor("#00E5FF"))
-titleText.setTextSize(16)
-titleText.setGravity(Gravity.CENTER)
-titleText.setPadding(0, 0, 0, 15)
-mainContainer.addView(titleText)
+titleText.setTextSize(15)
+titleText.setTypeface(Typeface.DEFAULT_BOLD)
+local titleParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0)
+titleText.setLayoutParams(titleParams)
+headerBar.addView(titleText)
 
--- Horizontal Tab Layout Bar
+-- Minimize Button (X) View
+local closeButton = TextView(context)
+closeButton.setText("×")
+closeButton.setTextColor(Color.parseColor("#00E5FF"))
+closeButton.setTextSize(26)
+closeButton.setPadding(15, 0, 5, 10)
+closeButton.setOnClickListener(luajava.createProxy("android.view.View$OnClickListener", {
+    onClick = function(v)
+        activity.runOnUiThread(luajava.createProxy("java.lang.Runnable", {
+            run = function()
+                mainContainer.setVisibility(View.GONE)
+                iconContainer.setVisibility(View.VISIBLE)
+            end
+        }))
+    end
+}))
+headerBar.addView(closeButton)
+mainContainer.addView(headerBar)
+
+-- Horizontal Tab Layout Area
 local tabBar = LinearLayout(context)
 tabBar.setOrientation(LinearLayout.HORIZONTAL)
-tabBar.setGravity(Gravity.CENTER)
 tabBar.setPadding(0, 0, 0, 20)
 mainContainer.addView(tabBar)
 
--- Content Frame Container
+-- Dynamic Frame View Canvas
 local contentFrame = FrameLayout(context)
 mainContainer.addView(contentFrame)
 
--- Tables to manage pages and tab view states
 local pages = {}
 local tabButtons = {}
 
 local function createPage()
     local page = LinearLayout(context)
     page.setOrientation(LinearLayout.VERTICAL)
-    page.setVisibility(View.GONE) 
-    local match = LinearLayout.LayoutParams.MATCH_PARENT
-    local wrap = LinearLayout.LayoutParams.WRAP_CONTENT
-    page.setLayoutParams(LinearLayout.LayoutParams(match, wrap))
+    page.setVisibility(View.GONE)
+    page.setLayoutParams(LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     contentFrame.addView(page)
     return page
 end
 
--- Initialize 5 Pages
-for i = 1, 5 do
-    pages[i] = createPage()
-end
+for i = 1, 5 do pages[i] = createPage() end
 
--- Function to handle tab switching
 local function switchTab(index)
     for i = 1, #pages do
         if i == index then
@@ -98,95 +209,84 @@ end
 
 local function addTab(title, index)
     local btn = Button(context)
-    
-    -- FIXED: Removed all Margin parameters completely to eliminate layout crashes.
-    -- Spacing is handled uniformly via button weight and structural padding.
-    local w = 0
-    local h = LinearLayout.LayoutParams.WRAP_CONTENT
-    local params = luajava.newInstance("android.widget.LinearLayout$LayoutParams", w, h, 1.0)
-    
+    local params = luajava.newInstance("android.widget.LinearLayout$LayoutParams", 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0)
     btn.setLayoutParams(params)
     btn.setText(title)
     btn.setTextSize(10)
-    btn.setPadding(2, 12, 2, 12)
-    
+    btn.setPadding(0, 15, 0, 15)
     btn.setOnClickListener(luajava.createProxy("android.view.View$OnClickListener", {
-        onClick = function(view)
-            switchTab(index)
-        end
+        onClick = function(v) switchTab(index) end
     }))
-    
     tabBar.addView(btn)
     tabButtons[index] = btn
 end
 
--- Define Tab Titles
 local tabTitles = {"Shield", "Visuals", "Drone", "Prices", "System"}
-for i, title in ipairs(tabTitles) do
-    addTab(title, i)
-end
+for i, title in ipairs(tabTitles) do addTab(title, i) end
 
 --------------------------------------------------
--- POPULATING THE PAGES WITH UI ELEMENTS
+-- INTERFACE CONTENT CONSTRUCTORS
 --------------------------------------------------
-
 local function addPageText(page, text, color)
     local txt = TextView(context)
     txt.setText(text)
     txt.setTextColor(Color.parseColor(color or "#FFFFFF"))
-    txt.setPadding(0, 10, 0, 10)
+    txt.setPadding(0, 8, 0, 8)
     page.addView(txt)
 end
 
 local function addPageButton(page, text, callback)
     local btn = Button(context)
-    local w = LinearLayout.LayoutParams.MATCH_PARENT
-    local h = LinearLayout.LayoutParams.WRAP_CONTENT
-    local params = luajava.newInstance("android.widget.LinearLayout$LayoutParams", w, h)
-    
-    btn.setLayoutParams(params)
+    btn.setLayoutParams(LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     btn.setText(text)
     btn.setTextColor(Color.parseColor("#FFFFFF"))
     btn.setBackground(createShape("#2A2A3A", 12, 1, "#00E5FF"))
-    btn.setPadding(0, 20, 0, 20)
+    btn.setPadding(0, 18, 0, 18)
     btn.setOnClickListener(luajava.createProxy("android.view.View$OnClickListener", {
         onClick = function(v) callback() end
     }))
     page.addView(btn)
 end
 
--- Page 1: Shield Content
-addPageText(pages[1], "Authentication Verification Layer", "#00E5FF")
-addPageButton(pages[1], "Verify Active Session Token", function()
-    print("Verifying structural interface parameters...")
+-- Page 1 Setup (Shield)
+addPageText(pages[1], "Status: Plan Verified [Free User]", "#00FF00")
+addPageText(pages[1], "License Verification", "#00E5FF")
+addPageButton(pages[1], "VERIFY ACTIVE CONFIGURATION TOKEN", function()
+    gg.toast("Verification layer acknowledged.")
 end)
 
--- Page 2: Visuals Content
-addPageText(pages[2], "Visual Interface Overlays", "#B0BEC5")
+-- Page 2 Setup (Visuals)
+addPageText(pages[2], "Perception Overlays", "#00E5FF")
+addPageButton(pages[2], "Bypass Protection System", function() gg.toast("Bypass initialized.") end)
 
--- Page 3: Drone Content
-addPageText(pages[3], "Matrix Coordinates Console", "#B0BEC5")
+-- Page 3 Setup (Drone)
+addPageText(pages[3], "Matrix Coordinates Console", "#00E5FF")
+addPageButton(pages[3], "Scan Camera Engine", function() gg.toast("Scanning elements...") end)
 
--- Page 4: Prices Content
-addPageText(pages[4], "Subscription Tiers Info", "#00E5FF")
-addPageText(pages[4], "• 03 Days VIP Tier Access\n• 07 Days VIP Tier Access\n• 30 Days VIP Tier Access", "#FFFFFF")
+-- Page 4 Setup (Prices)
+addPageText(pages[4], "Premium Tiers Info", "#00E5FF")
+addPageText(pages[4], "• 03 Days Access -> ₱45\n• 07 Days Access -> ₱85\n• Lifetime Pass -> ₱650", "#FFFFFF")
 
--- Page 5: System Content
-addPageText(pages[5], "UI Lifecycle Management", "#B0BEC5")
-addPageButton(pages[5], "Minimize UI Overlay", function()
+-- Page 5 Setup (System)
+addPageText(pages[5], "UI Lifecycle Properties", "#B0BEC5")
+addPageButton(pages[5], "EXIT RUNTIME ENVIRONMENT", function()
     activity.runOnUiThread(luajava.createProxy("java.lang.Runnable", {
         run = function()
             windowManager.removeView(mainContainer)
+            windowManager.removeView(iconContainer)
+            print("UI Thread Terminated.")
         end
     }))
 end)
 
--- Set initial default active tab view
 switchTab(1)
 
--- Display on Window Layer Safely
+--------------------------------------------------
+-- RENDERING LAYER EXECUTION
+--------------------------------------------------
 activity.runOnUiThread(luajava.createProxy("java.lang.Runnable", {
     run = function()
-        windowManager.addView(mainContainer, layoutParams)
+        windowManager.addView(iconContainer, iconParams)
+        windowManager.addView(mainContainer, mainParams)
     end
 }))
